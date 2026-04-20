@@ -1,0 +1,17 @@
+{
+  "redmine": {
+    "base_url": "http://your-redmine-server",
+    "project_key": "your-project-key",
+    "api_key": "your-api-key"
+  },
+  "output": {
+    "filename": "wikiexport.html",
+    "location": "./"
+  },
+  "options": {
+    "preserve_external_assets": true,
+    "download_assets_locally": true,
+    "timeout": 30,
+    "retry_attempts": 3
+  }
+}

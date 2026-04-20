@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.vscode/
+build/
+dist/
+images/
+wikiexport.html
+config.json
+*.log
+api_app.py
+render.yaml
+wiki_export_service.py
+사진순서.txt
