@@ -315,8 +315,11 @@ class WikiParser:
                     local_path = self._download_page_image(absolute_url, page_anchor_id, img_index)
                     
                     if local_path:
-                        # 상대 경로로 변환 (HTML 파일 기준)
-                        relative_path = os.path.relpath(local_path)
+                        # 상대 경로로 변환 (HTML 파일이 저장될 폴더 기준)
+                        # images_folder 의 상위 = HTML 출력 폴더 → 항상 'images/...' 형태가 되어
+                        # 저장 폴더를 어디로 지정하든(다른 드라이브 포함) 경로가 깨지지 않음.
+                        output_dir = os.path.dirname(self.images_folder) or '.'
+                        relative_path = os.path.relpath(local_path, output_dir).replace(os.sep, '/')
                         img['src'] = relative_path
                         
                         # 추적용 저장
