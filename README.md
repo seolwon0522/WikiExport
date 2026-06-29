@@ -1,39 +1,34 @@
-# 📚 Redmine Wiki Export Tool (사용 설명서)
+# 📚 Redmine Wiki Export Tool
 
-Redmine의 Wiki 문서 전체를 **단일 HTML 파일**로 내보내는 도구입니다.  
-좌측 고정 목차(TOC) + 검색 기능이 포함된 오프라인 열람용 문서를 생성합니다.
+Redmine 프로젝트의 위키 전체를 **단일 HTML 파일**로 내보내는 도구입니다.
+좌측 고정 목차(TOC) + 실시간 검색이 포함된 오프라인 열람용 문서를 생성하며,
+한 번에 **여러 프로젝트**를 선택해 각각 내보낼 수 있습니다.
 
 ---
 
-## 🖥️ 실행 방법
+## 🖥️ 실행
 
-### 방법 A — GUI 프로그램 (권장)
+### GUI (권장)
 
-**`WikiExport.exe`** 를 더블클릭하거나, Python이 설치되어 있다면:
+`dist/WikiExport.exe` 를 더블클릭하거나, Python 환경에서:
 
 ```
+pip install -r requirements.txt
 python gui_app.py
 ```
 
-GUI 창에서 아래 정보를 입력하고 **▶ 내보내기 시작** 버튼을 누릅니다:
+**사용 순서**
 
-| 항목 | 설명 |
-|------|------|
-| **Base URL** | Redmine 서버 주소 (예: `http://192.168.0.10:6080`) |
-| **Project Key** | 프로젝트 URL의 `/projects/` 뒤 식별자 (예: `bp-cloudpos-docs`) |
-| **API Key** | Redmine 내 계정 → API 액세스 키 (40자리) |
-| **저장 폴더** | 결과물을 저장할 폴더 |
-| **파일명** | 생성될 HTML 파일 이름 (기본값: `wikiexport.html`) |
+1. **Base URL** 과 **API Key** 입력
+2. **🔄 프로젝트 불러오기** — 위키가 활성화된 프로젝트 목록을 가져옵니다
+3. 내보낼 프로젝트를 **체크** (여러 개 선택 가능 · 전체 선택/해제 지원)
+4. **저장 폴더** · **파일명** 지정 후 **▶ 내보내기 시작**
 
-입력값은 로컬 `config.json`에 저장되어 다음 실행 때 불러옵니다.
-GitHub 저장소에는 민감정보가 포함되지 않도록 `config.json` 대신 `config.example.json`만 추적합니다.
+입력값과 선택은 로컬 `config.json` 에 저장되어 다음 실행 때 자동 복원됩니다.
 
----
+### CLI
 
-### 방법 B — 명령줄 (CLI)
-
-**`Run_WikiExport.bat`** 을 더블클릭하거나 터미널에서 실행합니다.  
-로컬 `config.json`에 먼저 설정을 입력해야 합니다.
+`config.json` 을 채운 뒤 실행합니다. (CLI는 `project_key` 하나만 처리 — 다중 선택은 GUI를 사용하세요.)
 
 ```
 python mirror_wiki.py
@@ -41,148 +36,99 @@ python mirror_wiki.py
 
 ---
 
-## ⚙️ config 설정
+## 📂 출력 구조
 
-처음에는 `config.example.json`을 복사해서 `config.json`으로 만든 뒤 값을 채워 사용하세요.
+선택한 프로젝트마다 **식별자 이름의 하위 폴더**로 독립 생성됩니다:
+
+```
+저장 폴더/
+├── bp-cloudpos/
+│   ├── wikiexport.html
+│   ├── images/
+│   └── styles/
+└── bp-cloudpos-docs/
+    ├── wikiexport.html
+    ├── images/
+    └── styles/
+```
+
+각 폴더는 완전히 독립적이라, 폴더째 옮기거나 공유해도 이미지·스타일이 깨지지 않습니다.
+
+**HTML 기능** — 좌측 고정 목차(트리) · 목차 실시간 검색 · "목차로 돌아가기" · 페이지 간 링크 유지 · 이미지 로컬 저장 · 반응형 레이아웃
+
+---
+
+## ⚙️ config.json
+
+`config.example.json` 을 복사해 `config.json` 을 만든 뒤 값을 채웁니다.
 
 ```json
 {
   "redmine": {
     "base_url": "http://your-redmine-server",
-    "project_key": "your-project-key",
-    "api_key": "your-api-key"
+    "api_key": "your-api-key",
+    "project_key": "project-a",
+    "project_keys": ["project-a", "project-b"]
   },
   "output": {
     "filename": "wikiexport.html",
     "location": "./"
   },
-  "options": {
-    "timeout": 30,
-    "retry_attempts": 3
-  }
+  "options": { "timeout": 30, "retry_attempts": 3 }
 }
 ```
 
-파일 구분:
-- `config.example.json`: 저장소에 포함되는 예시 파일
-- `config.json`: 로컬 실행용 실제 설정 파일, GitHub에는 올리지 않음
+| 항목 | 설명 |
+|------|------|
+| `base_url` | Redmine 서버 주소 (끝 `/` 불필요) |
+| `api_key` | REST API 인증 키 (40자리) |
+| `project_keys` | GUI 다중 내보내기 대상 식별자 목록 (GUI가 자동 관리) |
+| `project_key` | CLI(`mirror_wiki.py`)용 단일 식별자 |
+| `filename` / `location` | 결과 HTML 이름 / 저장 폴더 |
+| `timeout` / `retry_attempts` | 요청 타임아웃(초) / 재시도 횟수 |
 
-**항목 설명:**
-- **base_url**: Redmine 서버 주소 (끝에 `/` 불필요)
-- **project_key**: 프로젝트 식별자 — 브라우저 URL의 `/projects/` 바로 뒤 값
-- **api_key**: Redmine REST API 인증 키 (40자리 영문+숫자)
-- **filename**: 생성될 HTML 파일 이름
-- **location**: HTML 파일이 저장될 폴더 경로
-- **timeout**: 요청 타임아웃(초), 느린 서버의 경우 늘려주세요 (기본값: 30)
-- **retry_attempts**: 실패 시 재시도 횟수 (기본값: 3)
-
----
-
-## 📋 API 키 발급 방법
-
-1. Redmine에 로그인
-2. 우측 상단 계정 아이콘 클릭 → **내 계정**
-3. 우측 하단 **API 액세스 키** 항목에서 키 확인 또는 생성
-4. 생성된 키(40자리)를 `config.json`의 `api_key`에 붙여넣기
+> `config.json` 은 `.gitignore` 처리되어 저장소에 올라가지 않습니다.
+> exe로 공유할 땐 **exe 파일만** 전달하세요 (API 키 유출 방지).
 
 ---
 
-## 📤 내보내기 처리 단계
+## 🔑 API 키 발급
 
-내보내기 실행 시 다음 5단계가 순서대로 진행됩니다:
-
-1. **서버 연결 테스트** — API Key 및 네트워크 사전 확인
-2. **TOC 페이지 수신** — 위키 목차 인덱스 페이지 가져오기
-3. **링크 추출** — 위키 페이지 목록 파싱
-4. **페이지 다운로드** — 각 페이지 HTML + 이미지 로컬 저장
-5. **HTML 병합 및 저장** — 단일 HTML 파일 생성, `styles/` 폴더 복사
+Redmine 로그인 → 우측 상단 **내 계정** → 우측 하단 **API 액세스 키** 확인/생성 → `api_key` 에 입력.
 
 ---
 
-## 📄 출력 HTML 기능
+## 🛠️ 트러블슈팅
 
-- **고정 좌측 목차** — 계층 구조(트리) 형태의 TOC
-- **목차 실시간 검색** — 검색어 입력 시 즉시 필터링
-- **반응형 레이아웃** — 모바일/좁은 화면에서 목차 상단 배치
-- **내부 위키 링크 유지** — 페이지 간 링크가 앵커(#)로 재작성되어 동작
-- **이미지 로컬 저장** — 페이지별 하위 폴더(`images/page-xxx/`)에 저장
-
----
-
-## ⚙️ 트러블슈팅
-
-### Python이 없거나 에러 발생
-
-1. Python 3.8 이상 설치 필요
-2. https://www.python.org 에서 다운로드
-3. 설치할 때 **"Add Python to PATH"** 체크 필수
-4. 의존 패키지 설치: `pip install requests beautifulsoup4`
-
-### "❌ Error: config.json not found!"
-
-`config.json` 파일이 `Run_WikiExport.bat`, `mirror_wiki.py`와 **같은 폴더**에 있는지 확인하세요.
-
-### 인증 실패 (401)
-
-- API Key가 정확한지 확인 (앞뒤 공백 없어야 함)
-- Redmine 관리자 설정에서 REST API가 활성화되어 있는지 확인
-
-### 접근 거부 (403) / 페이지 없음 (404)
-
-- 해당 프로젝트에 멤버 권한이 있는지 확인
-- Project Key가 올바른지 확인 (대소문자 구분)
+| 증상 | 해결 |
+|------|------|
+| `ModuleNotFoundError` | `pip install -r requirements.txt` |
+| 인증 실패 (401) | API Key 확인 (앞뒤 공백 없이) · 관리자 REST API 활성화 |
+| 접근 거부 / 없음 (403 / 404) | 프로젝트 멤버 권한 · 식별자 확인 |
+| 프로젝트 목록이 안 뜸 | Base URL · API Key 입력 후 "🔄 프로젝트 불러오기" 클릭 |
 
 ---
 
 ## 🔨 EXE 빌드 (개발자용)
-
-PyInstaller로 단일 실행 파일 생성:
 
 ```
 pip install pyinstaller
 pyinstaller WikiExport.spec
 ```
 
-빌드 결과물: `dist/WikiExport.exe`
+결과물: `dist/WikiExport.exe` (단일 파일, `styles/` 와 `mirror_wiki.py` 번들 포함)
 
 ---
 
 ## 📁 파일 구조
 
 ```
-wikiexport/
-├── gui_app.py              ← GUI 메인 (python gui_app.py)
-├── mirror_wiki.py          ← CLI 핵심 로직 (python mirror_wiki.py)
-├── config.json             ← 연결 설정 파일
-├── Run_WikiExport.bat      ← CLI 모드 실행 배치 파일
-├── WikiExport.spec         ← PyInstaller EXE 빌드 설정
-├── styles/                 ← Redmine CSS (빌드 시 번들 포함)
-├── wikiexport.html         ← ✨ 내보내기 결과 HTML
-└── images/                 ← 페이지별 이미지 저장 폴더
-    ├── page-1-로그인/
-    ├── page-1-마감정산/
-    └── ...
+WikiExport/
+├── gui_app.py           GUI — 프로젝트 불러오기 · 다중 선택
+├── mirror_wiki.py       WikiParser — 다운로드 · 파싱 · HTML 병합
+├── styles/              Redmine CSS (빌드 시 번들)
+├── config.example.json  설정 예시
+├── WikiExport.spec      PyInstaller 빌드 설정
+├── Run_WikiExport.bat   CLI 실행 배치
+└── requirements.txt     의존성 (requests, beautifulsoup4)
 ```
-
----
-
-## ✅ 실행 전 체크리스트
-
-- [ ] Python 3.8 이상 설치 (`python --version`)
-- [ ] 패키지 설치: `pip install requests beautifulsoup4`
-- [ ] `config.json` 에 `base_url`, `project_key`, `api_key` 입력
-- [ ] Redmine 서버 접근 가능 (네트워크 확인)
-
----
-
-## 📝 주의사항
-
-1. 배치 파일 실행 중에 터미널 창을 닫지 마세요
-2. 큰 프로젝트는 시간이 오래 걸릴 수 있습니다
-3. 실행 중에 Redmine 서버가 느리면 에러가 발생할 수 있습니다
-
----
-
-**😊 처음 사용자도 쉽게 따라할 수 있습니다!**
-
-질문이 있으면 이 파일을 읽어보고, 해결 안 되면 문의하세요.
