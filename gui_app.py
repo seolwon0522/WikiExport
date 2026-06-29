@@ -116,11 +116,16 @@ class WikiExportApp(tk.Tk):
 
     def _build_ui(self):
         self._v_url      = tk.StringVar()
-        self._v_project  = tk.StringVar()
         self._v_apikey   = tk.StringVar()
         self._v_folder   = tk.StringVar()
         self._v_filename = tk.StringVar()
         self._v_show_api = tk.BooleanVar(value=False)
+
+        # 프로젝트 다중 선택 상태
+        self._project_checks  = {}   # identifier -> {'var': BooleanVar, 'name': str}
+        self._saved_selection = []   # config.json 에서 복원된 선택 식별자 목록
+        self._loading_projects = False
+        self._proj_status = tk.StringVar(value='Base URL · API Key 입력 후 “불러오기”')
 
         # ── 입력 폼 ──────────────────────────────────────────────────
         form = ttk.LabelFrame(self, text="Redmine 연결 설정", padding=(12, 8))
@@ -177,18 +182,7 @@ class WikiExportApp(tk.Tk):
                 '     https://redmine.example.com'
             ),
         )
-        _add_row(
-            1, 'Project Key', self._v_project,
-            hint_text   = '예) my-project   ← URL의 /projects/ 뒤에 오는 영문 식별자',
-            tooltip_text = (
-                'Redmine 프로젝트 식별자(슬러그)입니다.\n\n'
-                '확인 방법:\n'
-                '브라우저에서 위키 페이지를 열었을 때 주소창을 보면\n'
-                'http://서버/projects/【여기】/wiki  ← 이 부분입니다.\n\n'
-                '예) URL이 http://서버/projects/bp-cloudpos-docs/wiki 이면\n'
-                '    Project Key = bp-cloudpos-docs'
-            ),
-        )
+        self._build_project_selector(form, 1)
         _add_row(
             2, 'API Key', self._v_apikey,
             hint_text   = 'Redmine 로그인 → 우측 상단 내 계정 → API 액세스 키 (40자리)',
@@ -260,6 +254,155 @@ class WikiExportApp(tk.Tk):
         if folder:
             self._v_folder.set(folder)
 
+    # ------------------------------------------------------------------
+    # 프로젝트 선택 (서버에서 목록 불러오기 → 체크박스 다중 선택)
+    # ------------------------------------------------------------------
+
+    def _build_project_selector(self, form, grid_row):
+        """Project Key 수기 입력 대신, 서버에서 위키 프로젝트를 불러와 체크박스로 선택"""
+        # 라벨 + ⓘ
+        lf = ttk.Frame(form)
+        lf.grid(row=grid_row * 2, column=0, sticky='ne', padx=(0, 8), pady=(10, 0))
+        ttk.Label(lf, text="프로젝트:").pack(side='left')
+        tip = ttk.Label(lf, text=' ⓘ', foreground='#0077cc', cursor='question_arrow')
+        tip.pack(side='left')
+        _Tooltip(tip, (
+            'Base URL 과 API Key 를 입력한 뒤 “프로젝트 불러오기”를 누르면\n'
+            '해당 키로 접근 가능한 위키 프로젝트 목록을 가져옵니다.\n\n'
+            '내보낼 프로젝트를 하나 이상 체크하세요.\n'
+            '여러 개를 선택하면 각각 별도 폴더/HTML 로 생성됩니다.'
+        ))
+
+        box = ttk.Frame(form)
+        box.grid(row=grid_row * 2, column=1, sticky='we', pady=(10, 0))
+        box.columnconfigure(0, weight=1)
+
+        bar = ttk.Frame(box)
+        bar.grid(row=0, column=0, sticky='we')
+        self._btn_load = ttk.Button(bar, text="🔄 프로젝트 불러오기", command=self._load_projects)
+        self._btn_load.pack(side='left')
+        ttk.Label(bar, textvariable=self._proj_status,
+                  foreground='#888888', font=('Malgun Gothic', 8)).pack(side='left', padx=(8, 0))
+
+        # 스크롤 가능한 체크박스 영역
+        list_wrap = ttk.Frame(box, relief='solid', borderwidth=1)
+        list_wrap.grid(row=1, column=0, sticky='we', pady=(6, 0))
+        self._proj_canvas = tk.Canvas(list_wrap, height=92, highlightthickness=0)
+        sb = ttk.Scrollbar(list_wrap, orient='vertical', command=self._proj_canvas.yview)
+        self._proj_inner = ttk.Frame(self._proj_canvas)
+        self._proj_inner.bind(
+            '<Configure>',
+            lambda e: self._proj_canvas.configure(scrollregion=self._proj_canvas.bbox('all')))
+        self._proj_canvas.create_window((0, 0), window=self._proj_inner, anchor='nw')
+        self._proj_canvas.configure(yscrollcommand=sb.set)
+        self._proj_canvas.pack(side='left', fill='both', expand=True)
+        sb.pack(side='right', fill='y')
+
+        sel_bar = ttk.Frame(box)
+        sel_bar.grid(row=2, column=0, sticky='we', pady=(2, 0))
+        ttk.Button(sel_bar, text="전체 선택", width=10,
+                   command=lambda: self._set_all_projects(True)).pack(side='left')
+        ttk.Button(sel_bar, text="전체 해제", width=10,
+                   command=lambda: self._set_all_projects(False)).pack(side='left', padx=(6, 0))
+
+        ttk.Label(form, text='불러오기 후 내보낼 프로젝트를 체크하세요 (여러 개 가능)',
+                  foreground='#888888', font=('Malgun Gothic', 8)
+                  ).grid(row=grid_row * 2 + 1, column=1, sticky='w', padx=(2, 0), pady=(1, 4))
+
+    def _set_all_projects(self, value):
+        for info in self._project_checks.values():
+            info['var'].set(value)
+
+    def _selected_projects(self):
+        """체크된 (identifier, name) 목록"""
+        return [(ident, info['name'])
+                for ident, info in self._project_checks.items() if info['var'].get()]
+
+    def _load_projects(self):
+        if self._loading_projects:
+            return
+        url    = self._v_url.get().strip().rstrip('/')
+        apikey = self._v_apikey.get().strip()
+        if not url.startswith(('http://', 'https://')):
+            messagebox.showerror("입력 오류", "먼저 올바른 Base URL을 입력하세요 (http:// 또는 https://).")
+            return
+        if not apikey:
+            messagebox.showerror("입력 오류", "먼저 API Key를 입력하세요.")
+            return
+        self._loading_projects = True
+        self._btn_load.config(state='disabled')
+        self._proj_status.set("불러오는 중...")
+        threading.Thread(target=self._load_projects_worker,
+                         args=(url, apikey), daemon=True).start()
+
+    def _load_projects_worker(self, base_url, apikey):
+        """백그라운드: /projects.json 페이징 수집 → 위키 모듈 프로젝트만 필터"""
+        try:
+            import requests as _req
+            projects = []
+            offset, limit = 0, 100
+            while True:
+                resp = _req.get(
+                    f"{base_url}/projects.json",
+                    headers={'X-Redmine-API-Key': apikey},
+                    params={'limit': limit, 'offset': offset, 'include': 'enabled_modules'},
+                    timeout=15,
+                )
+                if resp.status_code == 401:
+                    self.after(0, lambda: self._proj_load_failed("인증 실패 (401) — API Key를 확인하세요."))
+                    return
+                if resp.status_code == 403:
+                    self.after(0, lambda: self._proj_load_failed("접근 거부 (403) — 권한을 확인하세요."))
+                    return
+                resp.raise_for_status()
+                data  = resp.json()
+                batch = data.get('projects', [])
+                projects.extend(batch)
+                total  = data.get('total_count', len(projects))
+                offset += limit
+                if offset >= total or not batch:
+                    break
+
+            # 위키 모듈이 있는 프로젝트만 (모듈 정보 없으면 일단 포함)
+            wiki_projects = []
+            for p in projects:
+                mods = p.get('enabled_modules')
+                if mods is None or any(m.get('name') == 'wiki' for m in mods):
+                    wiki_projects.append({'identifier': p['identifier'],
+                                          'name': p.get('name', p['identifier'])})
+            self.after(0, lambda: self._render_projects(wiki_projects))
+        except Exception as e:
+            self.after(0, lambda: self._proj_load_failed(f"불러오기 실패: {e}"))
+
+    def _proj_load_failed(self, msg):
+        self._loading_projects = False
+        self._btn_load.config(state='normal')
+        self._proj_status.set("❌ " + msg)
+
+    def _render_projects(self, projects):
+        self._loading_projects = False
+        self._btn_load.config(state='normal')
+        for child in self._proj_inner.winfo_children():
+            child.destroy()
+        self._project_checks.clear()
+
+        if not projects:
+            self._proj_status.set("위키가 활성화된 프로젝트가 없습니다.")
+            return
+
+        for p in projects:
+            ident = p['identifier']
+            var = tk.BooleanVar(value=(ident in self._saved_selection))
+            ttk.Checkbutton(
+                self._proj_inner,
+                text=f"{p['name']}  ({ident})",
+                variable=var,
+            ).pack(anchor='w', padx=6, pady=1)
+            self._project_checks[ident] = {'var': var, 'name': p['name']}
+
+        self._proj_status.set(f"✓ {len(projects)}개 — 내보낼 항목을 체크하세요.")
+        self._proj_canvas.yview_moveto(0)
+
     def _clear_log(self):
         self._log_box.configure(state='normal')
         self._log_box.delete('1.0', tk.END)
@@ -289,8 +432,13 @@ class WikiExportApp(tk.Tk):
             r = cfg.get('redmine', {})
             o = cfg.get('output', {})
             self._v_url.set(r.get('base_url', ''))
-            self._v_project.set(r.get('project_key', ''))
             self._v_apikey.set(r.get('api_key', ''))
+            # 이전 선택 복원: project_keys(리스트) 우선, 없으면 project_key(단일, 구버전 호환)
+            sel = r.get('project_keys')
+            if not sel:
+                single = r.get('project_key')
+                sel = [single] if single else []
+            self._saved_selection = list(sel)
             self._v_folder.set(o.get('location', get_exe_dir()))
             self._v_filename.set(o.get('filename', 'wikiexport.html'))
         except Exception:
@@ -298,11 +446,14 @@ class WikiExportApp(tk.Tk):
             self._v_filename.set('wikiexport.html')
 
     def _save_config(self):
+        selected = [ident for ident, _ in self._selected_projects()]
         cfg = {
             "redmine": {
-                "base_url":    self._v_url.get().strip(),
-                "project_key": self._v_project.get().strip(),
-                "api_key":     self._v_apikey.get().strip(),
+                "base_url":     self._v_url.get().strip(),
+                "project_keys": selected,
+                # 첫 선택은 project_key 로도 저장 → CLI(mirror_wiki.py) 하위호환
+                "project_key":  selected[0] if selected else "",
+                "api_key":      self._v_apikey.get().strip(),
             },
             "output": {
                 "filename": self._v_filename.get().strip(),
@@ -325,7 +476,6 @@ class WikiExportApp(tk.Tk):
 
     def _validate(self):
         url    = self._v_url.get().strip()
-        proj   = self._v_project.get().strip()
         apikey = self._v_apikey.get().strip()
         folder = self._v_folder.get().strip()
         fname  = self._v_filename.get().strip()
@@ -336,11 +486,12 @@ class WikiExportApp(tk.Tk):
         if not url.startswith(('http://', 'https://')):
             messagebox.showerror("입력 오류", "Base URL은 http:// 또는 https://로 시작해야 합니다.")
             return False
-        if not proj:
-            messagebox.showerror("입력 오류", "Project Key를 입력하세요.")
-            return False
         if not apikey:
             messagebox.showerror("입력 오류", "API Key를 입력하세요.")
+            return False
+        if not self._selected_projects():
+            messagebox.showerror("입력 오류",
+                "내보낼 프로젝트를 1개 이상 선택하세요.\n(“🔄 프로젝트 불러오기” 후 체크)")
             return False
         if not folder:
             messagebox.showerror("입력 오류", "저장 폴더를 선택하세요.")
@@ -388,14 +539,14 @@ class WikiExportApp(tk.Tk):
             from mirror_wiki import WikiParser  # 지연 import (exe 내부 모듈)
 
             base_url = self._v_url.get().strip().rstrip('/')
-            project  = self._v_project.get().strip()
             apikey   = self._v_apikey.get().strip()
             folder   = self._v_folder.get().strip()
             filename = self._v_filename.get().strip()
             if not filename.lower().endswith('.html'):
                 filename += '.html'
+            projects = self._selected_projects()   # [(identifier, name), ...]
 
-            # ── 사전 연결 진단 ───────────────────────────────────────────
+            # ── 사전 연결 진단 (1회) ──────────────────────────────────────
             self._log("🔌 서버 연결 테스트 중...")
             try:
                 test_resp = _req.get(
@@ -429,79 +580,100 @@ class WikiExportApp(tk.Tk):
                 self._log(f"⚠️  연결 테스트 중 예외 발생: {e} (계속 진행)")
             # ─────────────────────────────────────────────────────────────
 
-            images_folder = os.path.join(folder, 'images')
-            parser = WikiParser(
-                base_url=base_url,
-                api_key=apikey,
-                images_folder=images_folder,
-                timeout=30,
-                max_retries=3,
-            )
-            self._current_parser = parser
-
-            # Step 1 — TOC
-            self._log("\n📝 Step 1: TOC 페이지 가져오는 중...")
-            toc_html = parser.fetch_toc_page(project)
-            if not toc_html:
-                self._log("❌ TOC 페이지를 가져오지 못했습니다.")
-                self._log(f"   → Project Key '{project}'가 올바른지 확인하세요.")
-                self._log(f"   → 주소: {base_url}/projects/{project}/wiki")
-                return
-
-            # Step 2 — 링크 파싱
-            self._log("\n🔍 Step 2: 위키 링크 추출 중...")
-            links = parser.parse_toc_links(toc_html)
-            if not links:
-                self._log("❌ TOC에서 위키 페이지를 찾지 못했습니다.")
-                return
-            self._log(f"✓ {len(links)}개 페이지 발견")
-
-            if not self._running:
-                self._log("⚠️  내보내기 중단됨.")
-                return
-
-            # Step 3 — 페이지 다운로드
-            self._log(f"\n⬇️  Step 3: {len(links)}개 페이지 다운로드 중...")
-            parser.fetch_all_pages(links)
-            if not parser.pages:
-                self._log("❌ 페이지를 가져오지 못했습니다.")
-                return
-
-            if not self._running:
-                self._log("⚠️  내보내기 중단됨.")
-                return
-
-            # Step 4 — HTML 생성
-            self._log("\n🔗 Step 4: HTML 생성 중...")
-            merged_html = parser.generate_merged_html(project)
-
-            # Step 5 — 저장
-            self._log("\n💾 Step 5: 파일 저장 중...")
-            os.makedirs(folder, exist_ok=True)
-            output_path = os.path.join(folder, filename)
-            parser.save_to_file(merged_html, output_path)
-
-            # styles 폴더 복사 (HTML의 상대 경로 참조 유지)
+            self._log(f"\n📦 총 {len(projects)}개 프로젝트를 내보냅니다.")
             src_styles = get_resource_path('styles')
-            dst_styles = os.path.join(folder, 'styles')
-            if os.path.isdir(src_styles):
-                if not os.path.isdir(dst_styles):
-                    shutil.copytree(src_styles, dst_styles)
-                    self._log(f"✓ styles 폴더 복사: {dst_styles}")
-                else:
-                    self._log("✓ styles 폴더 이미 존재 — 복사 생략")
-            else:
-                self._log("⚠️  styles 폴더를 번들에서 찾을 수 없습니다.")
+            results = []  # (name, ok, pages, images, path)
 
-            abs_path = os.path.abspath(output_path)
+            for idx, (ident, name) in enumerate(projects, 1):
+                if not self._running:
+                    self._log("⚠️  내보내기 중단됨.")
+                    break
+
+                self._log(f"\n{'='*52}")
+                self._log(f"[{idx}/{len(projects)}] {name}  ({ident})")
+                self._log(f"{'='*52}")
+
+                # 프로젝트마다 자기 하위 폴더로 독립 생성 (이미지/앵커 충돌 방지)
+                proj_out = os.path.join(folder, ident)
+                images_folder = os.path.join(proj_out, 'images')
+                parser = WikiParser(
+                    base_url=base_url, api_key=apikey,
+                    images_folder=images_folder, timeout=30, max_retries=3,
+                )
+                self._current_parser = parser
+
+                # Step 1 — TOC
+                self._log("📝 Step 1: TOC 페이지 가져오는 중...")
+                toc_html = parser.fetch_toc_page(ident)
+                if not toc_html:
+                    self._log(f"❌ TOC 실패 — '{ident}' 건너뜀.")
+                    results.append((name, False, 0, 0, ''))
+                    continue
+
+                # Step 2 — 링크 파싱
+                self._log("🔍 Step 2: 위키 링크 추출 중...")
+                links = parser.parse_toc_links(toc_html)
+                if not links:
+                    self._log("❌ 위키 페이지를 찾지 못함 — 건너뜀.")
+                    results.append((name, False, 0, 0, ''))
+                    continue
+                self._log(f"✓ {len(links)}개 페이지 발견")
+
+                if not self._running:
+                    self._log("⚠️  내보내기 중단됨.")
+                    break
+
+                # Step 3 — 페이지 다운로드
+                self._log(f"⬇️  Step 3: {len(links)}개 페이지 다운로드 중...")
+                parser.fetch_all_pages(links)
+                if not parser.pages:
+                    self._log("❌ 페이지 수신 실패 — 건너뜀.")
+                    results.append((name, False, 0, 0, ''))
+                    continue
+
+                if not self._running:
+                    self._log("⚠️  내보내기 중단됨.")
+                    break
+
+                # Step 4 — HTML 생성
+                self._log("🔗 Step 4: HTML 생성 중...")
+                merged_html = parser.generate_merged_html(ident)
+
+                # Step 5 — 저장
+                self._log("💾 Step 5: 파일 저장 중...")
+                os.makedirs(proj_out, exist_ok=True)
+                output_path = os.path.join(proj_out, filename)
+                parser.save_to_file(merged_html, output_path)
+
+                # styles 폴더 복사 (프로젝트 폴더마다)
+                dst_styles = os.path.join(proj_out, 'styles')
+                if os.path.isdir(src_styles):
+                    if not os.path.isdir(dst_styles):
+                        shutil.copytree(src_styles, dst_styles)
+                else:
+                    self._log("⚠️  styles 폴더를 번들에서 찾을 수 없습니다.")
+
+                abs_path = os.path.abspath(output_path)
+                self._log(f"✅ 완료: {abs_path}")
+                self._log(f"   페이지 {len(parser.pages)}개 / 이미지 {len(parser.downloaded_images)}개"
+                          f" / {len(merged_html) / (1024*1024):.2f} MB")
+                results.append((name, True, len(parser.pages),
+                                len(parser.downloaded_images), abs_path))
+                self._current_parser = None
+
+            # ── 전체 요약 ────────────────────────────────────────────────
+            ok = [r for r in results if r[1]]
             self._log(f"\n{'='*52}")
-            self._log(f"✅ 내보내기 완료!")
-            self._log(f"📂 파일: {abs_path}")
-            self._log(f"📊 총 {len(parser.pages)}개 페이지 / {len(parser.downloaded_images)}개 이미지")
-            self._log(f"📈 파일 크기: {len(merged_html) / (1024*1024):.2f} MB")
+            self._log(f"🏁 전체 완료 — 성공 {len(ok)} / 시도 {len(results)}")
+            for name, success, pg, im, _ in results:
+                if success:
+                    self._log(f"  ✅ {name}  (페이지 {pg}, 이미지 {im})")
+                else:
+                    self._log(f"  ❌ {name}  실패")
             self._log(f"{'='*52}\n")
 
-            self.after(0, lambda: self._on_complete(folder))
+            if ok:
+                self.after(0, lambda: self._on_complete(folder))
 
         except Exception as e:
             import traceback

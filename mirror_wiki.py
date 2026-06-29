@@ -732,7 +732,7 @@ class WikiParser:
 {page_data['content']}
                 </div>
                 <div class="back-to-toc">
-                    <a href="#toc">⬆ 목차로 돌아가기</a>
+                    <a href="#toc" onclick="window.scrollTo({{top:0,behavior:'smooth'}});return false;">⬆ 목차로 돌아가기</a>
                 </div>
             </section>
 '''
